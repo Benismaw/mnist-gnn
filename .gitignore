@@ -1,0 +1,10 @@
+# Données et résultats générés
+*.png
+*.ckpt
+data/
+__pycache__/
+*.pyc
+
+# Environnement
+.venv/
+venv/
