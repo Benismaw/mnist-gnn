@@ -12,7 +12,9 @@ def image_to_graph_superpixels(image, n_segments=100):
     """
     # 1) Reshape en 2D
     img_2d = image.reshape(28, 28)
-
+    # Masque : ne garder que les pixels du chiffre (blancs)
+    threshold = 0.1
+    foreground_mask = img_2d > threshold
     # 2) SLIC → carte des superpixels
     # chaque pixel reçoit un label (0 à n_segments-1)
     # segments = slic(
@@ -33,31 +35,42 @@ def image_to_graph_superpixels(image, n_segments=100):
 
     n_nodes = segments.max() + 1  # nombre réel de superpixels
 
-    # 3) Features de chaque nœud
-    node_features = np.zeros((n_nodes, 9))
+
+    # Ne garde que les superpixels qui touchent le foreground
+    valid_ids = []
     for seg_id in range(n_nodes):
-        mask = (segments == seg_id)           # pixels de ce superpixel
+        mask = (segments == seg_id)
+        if mask.sum() == 0:
+            continue
+        # Garde seulement si le superpixel est majoritairement foreground
+        if foreground_mask[mask].mean() > 0.5:
+            valid_ids.append(seg_id)
+
+    # Remapping des IDs (0, 1, 2... sans trous)
+
+    id_map = {old_id: new_id for new_id, old_id in enumerate(valid_ids)}
+    n_nodes = len(valid_ids)
+
+    # 3) Features uniquement pour les nœuds valides
+    node_features = np.zeros((n_nodes, 9))
+    for old_id in valid_ids:
+        new_id=id_map[old_id]
+        mask = (segments == old_id)          
 
         if mask.sum() == 0:
                 continue
-        # node_features[seg_id, 0] = img_2d[mask].mean()   # intensité moyenne
-        # rows, cols = np.where(mask)
-        # node_features[seg_id, 1] = img_2d[mask].std() # variance (texture)
-        # node_features[seg_id, 2] = rows.mean() / 28      # position y normalisée
-        # node_features[seg_id, 3] = cols.mean() / 28      # position x normalisée
-        # node_features[seg_id, 4] = mask.sum() / 784       # taille du superpixel
         rows, cols = np.where(mask)
         pixels = img_2d[mask]
 
-        node_features[seg_id, 0] = pixels.mean()           # intensité moyenne
-        node_features[seg_id, 1] = pixels.std()            # variance
-        node_features[seg_id, 2] = pixels.max()            # max
-        node_features[seg_id, 3] = pixels.min()            # min
-        node_features[seg_id, 4] = rows.mean() / 28        # position y
-        node_features[seg_id, 5] = cols.mean() / 28        # position x
-        node_features[seg_id, 6] = mask.sum() / 784        # taille
-        node_features[seg_id, 7] = (rows.max()-rows.min()) / 28  # hauteur région
-        node_features[seg_id, 8] = (cols.max()-cols.min()) / 28  # largeur région
+        node_features[new_id, 0] = pixels.mean()           # intensité moyenne
+        node_features[new_id, 1] = pixels.std()            # variance
+        node_features[new_id, 2] = pixels.max()            # max
+        node_features[new_id, 3] = pixels.min()            # min
+        node_features[new_id, 4] = rows.mean() / 28        # position y
+        node_features[new_id, 5] = cols.mean() / 28        # position x
+        node_features[new_id, 6] = mask.sum() / 784        # taille
+        node_features[new_id, 7] = (rows.max()-rows.min()) / 28  # hauteur région
+        node_features[new_id, 8] = (cols.max()-cols.min()) / 28  # largeur région
 
     node_features = np.nan_to_num(node_features, nan=0.0)
     x = torch.tensor(node_features, dtype=torch.float)   # (n_nodes, 3)
@@ -68,17 +81,26 @@ def image_to_graph_superpixels(image, n_segments=100):
     for row in range(28):
         for col in range(28):
             current = segments[row, col]
+            if current not in id_map:   
+                continue
             # regarde les 4 voisins directs
             for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
                 r, c = row+dr, col+dc
                 if 0 <= r < 28 and 0 <= c < 28:
                     neighbor = segments[r, c]
+                    if neighbor not in id_map:
+                        continue
                     if current != neighbor:
-                        edges.add((current, neighbor))
-                        edges.add((neighbor, current))
+                        u, v = id_map[current], id_map[neighbor]
+                        edges.add((u, v))
+                        edges.add((v, u))
 
     edge_list = list(edges)
-    edge_index = torch.tensor(edge_list, dtype=torch.long).t()  # (2, nb_aretes)
+    if len(edge_list) == 0:
+        edge_index = torch.zeros((2, 0), dtype=torch.long)
+    else:
+        edge_index = torch.tensor(edge_list, dtype=torch.long).t()
+    
 
     return Data(x=x, edge_index=edge_index)
 
