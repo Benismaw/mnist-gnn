@@ -13,6 +13,8 @@ from torch_geometric.nn import global_mean_pool
 import sys 
 sys.path.append('.')
 from utils.graph_builder_superpixels import image_to_graph_superpixels
+
+from utils.decoupled_pooling import image_to_graph_differentiable,train_pooling_only
 from sklearn.metrics import f1_score, classification_report
 
 class GCN(torch.nn.Module):
@@ -81,11 +83,15 @@ class GCN(torch.nn.Module):
 from torch_geometric.loader import DataLoader
 
 def main():
+   
     # 1) Charger MNIST
     print("Chargement MNIST...")
     mnist = fetch_openml('mnist_784', version=1, as_frame=False, parser='liac-arff')
     X, y = mnist.data / 255.0, mnist.target.astype(int)
 
+    pooling = train_pooling_only(X, n_epochs=30, n_clusters=30, n_samples=500)
+    for p in pooling.parameters():
+        p.requires_grad = False
     # 2) Subset
     X_sub, y_sub = X[:10000], y[:10000]
     split = int(0.8 * len(X_sub))
@@ -96,13 +102,13 @@ def main():
     print("Construction des graphes...")
     train_graphs = []
     for i in range(len(X_train)):
-        g = image_to_graph_superpixels(X_train[i])
+        g = image_to_graph_differentiable(X_train[i],pooling)
         g.y = torch.tensor([y_train[i]], dtype=torch.long)
         train_graphs.append(g)
 
     test_graphs = []
     for i in range(len(X_test)):
-        g = image_to_graph_superpixels(X_test[i])
+        g = image_to_graph_differentiable(X_test[i],pooling)
         g.y = torch.tensor([y_test[i]], dtype=torch.long)
         test_graphs.append(g)
 
